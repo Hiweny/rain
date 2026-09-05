@@ -29,7 +29,7 @@ export function useClock(showSeconds = true) {
   useEffect(() => {
     const tick = () => setT(read())
     tick()
-    const id = window.setInterval(tick, showSeconds ? 1000 : 5000)
+    const id = window.setInterval(tick, showSeconds ? 1000 : 2000)
     return () => window.clearInterval(id)
   }, [showSeconds])
   return t

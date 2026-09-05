@@ -18,7 +18,6 @@ export function useRainAudio() {
 
   const [source, setSourceState] = useState<Source>(load('rain.source', 'rain'))
   const [playing, setPlaying] = useState(false)
-  const [entered, setEntered] = useState(false)
 
   const [tracks, setTracks] = useState<Track[]>([])
   const [idx, setIdx] = useState(0)
@@ -157,9 +156,8 @@ export function useRainAudio() {
     [platform],
   )
 
-  // 首次进入（用户手势内）解锁并播放；若上次停在歌单则先拉取
-  const enter = useCallback(async () => {
-    setEntered(true)
+  // 解锁音频播放（浏览器要求用户手势）；若音源是歌单则先确保已拉取
+  const unlock = useCallback(async () => {
     if (rainRef.current) rainRef.current.volume = muted ? 0 : volRain
     if (sourceRef.current === 'music' && !tracksRef.current.length) {
       const list = await loadPlaylist(playlistId)
@@ -168,6 +166,21 @@ export function useRainAudio() {
     await new Promise((r) => setTimeout(r, 30))
     await playActive()
   }, [playActive, muted, volRain, loadPlaylist, playlistId])
+
+  // 页面即显：先尝试自动播放（多数浏览器会拦截），并在首次任意手势时解锁一次
+  useEffect(() => {
+    void playActive()
+    const gestures = ['pointerdown', 'touchstart', 'keydown']
+    let done = false
+    const onGesture = () => {
+      if (done) return
+      done = true
+      void unlock()
+      gestures.forEach((g) => window.removeEventListener(g, onGesture))
+    }
+    gestures.forEach((g) => window.addEventListener(g, onGesture, { passive: true }))
+    return () => gestures.forEach((g) => window.removeEventListener(g, onGesture))
+  }, [playActive, unlock])
 
   const setSource = useCallback(
     async (s: Source, id?: string) => {
@@ -298,8 +311,7 @@ export function useRainAudio() {
   const setVolume = source === 'rain' ? setVolRain : setVolMusic
 
   return {
-    entered,
-    enter,
+    unlock,
     source,
     setSource,
     playing,

@@ -1,33 +1,72 @@
 import { useEffect, useRef } from 'react'
 import RaindropFX from 'raindrop-fx'
 import { extractPalette, type Palette } from '../lib/color'
-import { fetchBitmap, isPortrait, loadAnimeBitmap, nextRainImage } from '../lib/backgrounds'
+import { fetchBlob, isPortrait, loadAnimeBlob, nextRainImage } from '../lib/backgrounds'
 
 type BgMode = 'rain' | 'anime'
 
 interface Props {
   mode: BgMode
   nonce: number
+  /** 是否渲染 WebGL 雨滴（阅图模式可关） */
+  rainOn: boolean
+  /** 压暗程度 0..0.65 */
+  dim: number
   onPalette: (p: Palette) => void
 }
 
-export default function RainCanvas({ mode, nonce, onPalette }: Props) {
+export default function RainCanvas({ mode, nonce, rainOn, dim, onPalette }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const fallbackRef = useRef<HTMLDivElement>(null)
+  const photoRef = useRef<HTMLDivElement>(null)
+  const dimRef = useRef<HTMLDivElement>(null)
   const fxRef = useRef<RaindropFX | null>(null)
   const modeRef = useRef(mode)
-  modeRef.current = mode
+  const rainOnRef = useRef(rainOn)
+  const objUrlRef = useRef<string>('')
   const onPaletteRef = useRef(onPalette)
-  onPaletteRef.current = onPalette
   const firstRun = useRef(true)
+  modeRef.current = mode
+  rainOnRef.current = rainOn
+  onPaletteRef.current = onPalette
+
+  /** 取一张图：返回 WebGL 位图 + 用于即时显示的图层 URL */
+  async function acquire(target: BgMode, presetRainUrl?: string) {
+    let photoUrl = ''
+    let bitmap: ImageBitmap
+    if (target === 'rain') {
+      const url = presetRainUrl ?? nextRainImage()
+      photoUrl = url
+      bitmap = await createImageBitmap(await fetchBlob(url))
+    } else {
+      const blob = await loadAnimeBlob(isPortrait())
+      if (objUrlRef.current) URL.revokeObjectURL(objUrlRef.current)
+      photoUrl = URL.createObjectURL(blob)
+      objUrlRef.current = photoUrl
+      bitmap = await createImageBitmap(blob)
+    }
+    return { photoUrl, bitmap }
+  }
+
+  function setPhoto(url: string) {
+    if (photoRef.current && url) photoRef.current.style.backgroundImage = `url("${url}")`
+  }
 
   // 初始化（只跑一次）
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-
     let cancelled = false
-    let fx: RaindropFX | null = null
+
+    // 性能分级：触屏/小屏低核数降低密度与分辨率
+    const lite =
+      window.matchMedia?.('(pointer: coarse)').matches ||
+      (window.innerWidth < 760 && (navigator.hardwareConcurrency || 8) <= 6)
+    const maxDpr = lite ? 1.5 : 2
+    const sizeCanvas = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, maxDpr)
+      canvas.width = Math.floor(window.innerWidth * dpr)
+      canvas.height = Math.floor(window.innerHeight * dpr)
+    }
 
     const supports = (() => {
       try {
@@ -37,130 +76,98 @@ export default function RainCanvas({ mode, nonce, onPalette }: Props) {
       }
     })()
 
-    // 设备能力分级：触屏或小屏低核数走轻量参数，保证手机端流畅
-    const lite =
-      window.matchMedia?.('(pointer: coarse)').matches ||
-      (window.innerWidth < 760 && (navigator.hardwareConcurrency || 8) <= 6)
-    const maxDpr = lite ? 1.5 : 2
-    const sizeCanvas = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, maxDpr)
-      const w = Math.floor(window.innerWidth * dpr)
-      const h = Math.floor(window.innerHeight * dpr)
-      canvas.width = w
-      canvas.height = h
-      return { w, h }
-    }
+    async function boot() {
+      // 1) 先用本地雨窗图把静态图层铺满，杜绝黑屏
+      const firstUrl = modeRef.current === 'rain' ? nextRainImage() : ''
+      if (firstUrl) setPhoto(firstUrl)
 
-    const loadBackground = async (first = false) => {
+      // 2) 解码首图
+      let first: { photoUrl: string; bitmap: ImageBitmap }
       try {
-        let bmp: ImageBitmap
-        let cssFallback = ''
-        if (modeRef.current === 'anime') {
-          bmp = await loadAnimeBitmap(isPortrait())
-        } else {
-          const url = nextRainImage()
-          cssFallback = url
-          bmp = await fetchBitmap(url)
-        }
-        if (cancelled) return
-        const palette = await extractPalette(bmp)
-        onPaletteRef.current(palette)
-        if (fx) {
-          await fx.setBackground(bmp as unknown as Parameters<RaindropFX['setBackground']>[0])
-        }
-        if (fallbackRef.current) fallbackRef.current.style.backgroundImage = `url(${cssFallback})`
-        if (first) void 0
-      } catch (e) {
-        // 动漫源全挂时退回本地雨窗图，保证有画面
-        if (modeRef.current === 'anime') {
-          try {
-            const bmp = await fetchBitmap(nextRainImage())
-            if (!cancelled && fx) {
-              const palette = await extractPalette(bmp)
-              onPaletteRef.current(palette)
-              await fx.setBackground(bmp as unknown as Parameters<RaindropFX['setBackground']>[0])
-            }
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-    }
-
-    if (supports) {
-      const { w, h } = sizeCanvas()
-      try {
-        fx = new RaindropFX({
-          canvas,
-          spawnInterval: lite ? [0.08, 0.28] : [0.06, 0.22],
-          spawnSize: lite ? [14, 64] : [18, 86],
-          spawnLimit: lite ? 820 : 1600,
-          slipRate: 0.05,
-          dropletsPerSecond: lite ? 420 : 900,
-          dropletSize: lite ? [6, 18] : [8, 24],
-          mist: true,
-          mistColor: [0.014, 0.022, 0.018, 1],
-          backgroundBlurSteps: lite ? 3 : 4,
-          mistBlurStep: lite ? 4 : 5,
-          gravity: 2200,
-          raindropCompose: 'smoother',
-        } as ConstructorParameters<typeof RaindropFX>[0])
-        fxRef.current = fx
-        fx.start().then(() => loadBackground(true))
+        first = await acquire(modeRef.current, firstUrl || undefined)
       } catch {
-        fx = null
+        const u = nextRainImage()
+        setPhoto(u)
+        first = await acquire('rain', u)
+      }
+      if (cancelled) return
+      setPhoto(first.photoUrl)
+      const palette = await extractPalette(first.bitmap)
+      if (cancelled) return
+      onPaletteRef.current(palette)
+
+      if (!supports) {
+        photoRef.current?.classList.add('sharp')
+        return
       }
 
-      const onResize = () => {
-        const { w, h } = sizeCanvas()
-        fxRef.current?.resize(w, h)
+      // 3) 背景直接传入构造函数，首帧即带图（避免“先黑一下再出图”）
+      //    参数对齐 rainymood 官网（即库默认值），仅在低端机下调密度
+      sizeCanvas()
+      const fx = new RaindropFX({
+        canvas,
+        background: first.bitmap as unknown as ConstructorParameters<typeof RaindropFX>[0]['background'],
+        spawnLimit: lite ? 1100 : 2000,
+        dropletsPerSeconds: lite ? 320 : 500,
+      } as ConstructorParameters<typeof RaindropFX>[0])
+      fxRef.current = fx
+      if (rainOnRef.current) {
+        await fx.start()
+      } else {
+        canvas!.style.display = 'none'
+        photoRef.current?.classList.add('sharp')
       }
-      const onVis = () => {
-        if (document.hidden) fxRef.current?.stop()
-        else fxRef.current?.start()
-      }
-      window.addEventListener('resize', onResize)
-      window.addEventListener('orientationchange', onResize)
-      document.addEventListener('visibilitychange', onVis)
+    }
 
-      return () => {
-        cancelled = true
-        window.removeEventListener('resize', onResize)
-        window.removeEventListener('orientationchange', onResize)
-        document.removeEventListener('visibilitychange', onVis)
-        fxRef.current?.stop()
-        fxRef.current = null
-      }
-    } else {
-      // 不支持 WebGL2：降级为静态背景
-      if (fallbackRef.current) fallbackRef.current.style.display = 'block'
-      canvas.style.display = 'none'
-      loadBackground(true)
-      return () => {
-        cancelled = true
-      }
+    const onResize = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, maxDpr)
+      fxRef.current?.resize(
+        Math.floor(window.innerWidth * dpr),
+        Math.floor(window.innerHeight * dpr),
+      )
+    }
+    const onVis = () => {
+      if (!fxRef.current) return
+      if (document.hidden) fxRef.current.stop()
+      else if (rainOnRef.current) fxRef.current.start()
+    }
+    window.addEventListener('resize', onResize)
+    window.addEventListener('orientationchange', onResize)
+    document.addEventListener('visibilitychange', onVis)
+    void boot()
+
+    return () => {
+      cancelled = true
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('orientationchange', onResize)
+      document.removeEventListener('visibilitychange', onVis)
+      fxRef.current?.stop()
+      fxRef.current = null
+      if (objUrlRef.current) URL.revokeObjectURL(objUrlRef.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 切换模式 / 换一张（首次挂载由初始化 effect 负责，这里跳过）
+  // 切换模式 / 换一张
   useEffect(() => {
     if (firstRun.current) {
       firstRun.current = false
       return
     }
-    if (!fxRef.current) return
     let alive = true
     ;(async () => {
       try {
-        const bmp =
-          mode === 'anime' ? await loadAnimeBitmap(isPortrait()) : await fetchBitmap(nextRainImage())
+        const got = await acquire(mode)
         if (!alive) return
-        const palette = await extractPalette(bmp)
+        setPhoto(got.photoUrl)
+        const palette = await extractPalette(got.bitmap)
+        if (!alive) return
         onPaletteRef.current(palette)
-        await fxRef.current?.setBackground(bmp as unknown as Parameters<RaindropFX['setBackground']>[0])
+        await fxRef.current?.setBackground(
+          got.bitmap as unknown as Parameters<RaindropFX['setBackground']>[0],
+        )
       } catch {
-        /* keep current */
+        /* 保留当前画面 */
       }
     })()
     return () => {
@@ -169,10 +176,30 @@ export default function RainCanvas({ mode, nonce, onPalette }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, nonce])
 
+  // 雨滴开关（阅图模式）
+  useEffect(() => {
+    const photo = photoRef.current
+    if (rainOn) {
+      photo?.classList.remove('sharp')
+      if (canvasRef.current) canvasRef.current.style.display = ''
+      void fxRef.current?.start()
+    } else {
+      fxRef.current?.stop()
+      if (canvasRef.current) canvasRef.current.style.display = 'none'
+      photo?.classList.add('sharp')
+    }
+  }, [rainOn])
+
+  // 亮度（压暗遮罩）
+  useEffect(() => {
+    if (dimRef.current) dimRef.current.style.opacity = String(dim)
+  }, [dim])
+
   return (
     <>
+      <div ref={photoRef} className="bg-photo" />
       <canvas ref={canvasRef} className="rain-canvas" />
-      <div ref={fallbackRef} className="rain-fallback" />
+      <div ref={dimRef} className="dim-overlay" style={{ opacity: dim }} />
     </>
   )
 }

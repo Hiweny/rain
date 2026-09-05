@@ -14,11 +14,10 @@ export function nextRainImage(): string {
 
 /**
  * 动漫随机图源（均无需 Key），按优先级顺序回退：
- *  1) loliapi：302 到随机镜像图，全链路带 Access-Control-Allow-Origin:*，
- *     可直接 fetch 成干净纹理；注意它【不接受】任何 query 参数（会 302 到 404），
- *     且响应为 cache-control:no-cache，天然每次随机，故用 cache:'no-store' 而非加参数。
- *  2) t.alcy.cc / 3) moe.jitsu.top：最终图不带跨域头，浏览器 fetch 通常会被 CORS 拦截，
- *     仅在 loliapi 不可用时作尽力兜底，失败即跳过，保证不黑屏。
+ *  1) loliapi：302 到随机镜像图，全链路带 Access-Control-Allow-Origin:*；
+ *     注意它【不接受】query 参数（会 302 到 404），响应为 no-cache，天然每次随机。
+ *  2) t.alcy.cc / 3) moe.jitsu.top：最终图不带跨域头，浏览器 fetch 通常被 CORS 拦截，
+ *     仅在 loliapi 不可用时尽力兜底，失败即跳过。
  */
 function animeCandidates(portrait: boolean): string[] {
   const loli = portrait
@@ -27,8 +26,7 @@ function animeCandidates(portrait: boolean): string[] {
   return [...loli, 'https://t.alcy.cc/mp/', 'https://moe.jitsu.top/img/']
 }
 
-/** 以 CORS 方式取图并解码成 ImageBitmap（保证 WebGL 纹理不被污染） */
-export async function fetchBitmap(url: string, timeoutMs = 12000): Promise<ImageBitmap> {
+export async function fetchBlob(url: string, timeoutMs = 12000): Promise<Blob> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), timeoutMs)
   try {
@@ -42,24 +40,29 @@ export async function fetchBitmap(url: string, timeoutMs = 12000): Promise<Image
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const blob = await resp.blob()
     if (!blob.type.startsWith('image/')) throw new Error('not an image')
-    return await createImageBitmap(blob)
+    return blob
   } finally {
     clearTimeout(timer)
   }
 }
 
-/** 依次尝试动漫图源，返回第一张成功的位图 */
-export async function loadAnimeBitmap(portrait: boolean): Promise<ImageBitmap> {
+/** 依次尝试动漫图源，返回第一张成功的图片 Blob */
+export async function loadAnimeBlob(portrait: boolean): Promise<Blob> {
   const candidates = animeCandidates(portrait)
   let lastErr: unknown = null
   for (const url of candidates) {
     try {
-      return await fetchBitmap(url)
+      return await fetchBlob(url)
     } catch (e) {
       lastErr = e
     }
   }
   throw lastErr ?? new Error('all anime sources failed')
+}
+
+export async function fetchBitmap(url: string, timeoutMs = 12000): Promise<ImageBitmap> {
+  const blob = await fetchBlob(url, timeoutMs)
+  return createImageBitmap(blob)
 }
 
 export function isPortrait(): boolean {

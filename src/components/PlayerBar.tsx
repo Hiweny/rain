@@ -1,17 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import type { useRainAudio } from '../hooks/useRainAudio'
 import { fmt } from '../hooks/useRainAudio'
-import { load, save } from '../lib/storage'
 import {
   ChevronDownIcon,
-  ChevronUpIcon,
   ExitFullscreenIcon,
   FullscreenIcon,
   MuteIcon,
   MusicIcon,
   NextIcon,
   PauseIcon,
-  PinIcon,
   PlayIcon,
   PrevIcon,
   RainIcon,
@@ -31,47 +28,24 @@ interface Props {
   bgMode: BgMode
   onBgMode: (m: BgMode) => void
   onShuffleBg: () => void
-  showSeconds: boolean
-  onShowSeconds: (b: boolean) => void
+  animeRain: boolean
+  setAnimeRain: (b: boolean) => void
+  dim: number
+  setDim: (n: number) => void
+  cycle: boolean
+  setCycle: (b: boolean) => void
 }
 
-export default function PlayerBar({ audio, bgMode, onBgMode, onShuffleBg, showSeconds, onShowSeconds }: Props) {
+export default function PlayerBar(props: Props) {
+  const { audio, bgMode, onBgMode, onShuffleBg, animeRain, setAnimeRain, dim, setDim, cycle, setCycle } = props
   const [panel, setPanel] = useState(false)
-  const [pinned, setPinned] = useState<boolean>(load('rain.pinned', false))
   const [hidden, setHidden] = useState(false)
   const [isFs, setIsFs] = useState(false)
   const [idInput, setIdInput] = useState(audio.playlistId)
-  const [interacted, setInteracted] = useState(false)
   const progressRef = useRef<HTMLDivElement>(null)
-  const dockRef = useRef<HTMLDivElement>(null)
 
   const isMusic = audio.source === 'music'
   const progress = audio.dur > 0 ? Math.min(100, (audio.ctime / audio.dur) * 100) : 0
-
-  // 自动隐藏：用户已与播放条交互过、且未固定、正在播放、面板关闭时，静止 7s 收成小圆钮
-  useEffect(() => {
-    if (pinned || !audio.playing || panel || !interacted) {
-      setHidden(false)
-      return
-    }
-    let timer = 0
-    const arm = () => {
-      window.clearTimeout(timer)
-      timer = window.setTimeout(() => setHidden(true), 7000)
-    }
-    arm()
-    const wake = () => {
-      setHidden(false)
-      arm()
-    }
-    window.addEventListener('pointermove', wake)
-    window.addEventListener('touchstart', wake, { passive: true })
-    return () => {
-      window.clearTimeout(timer)
-      window.removeEventListener('pointermove', wake)
-      window.removeEventListener('touchstart', wake)
-    }
-  }, [pinned, audio.playing, panel, interacted])
 
   useEffect(() => {
     const onFs = () => setIsFs(!!document.fullscreenElement)
@@ -99,40 +73,29 @@ export default function PlayerBar({ audio, bgMode, onBgMode, onShuffleBg, showSe
     const t = e.touches[0]
     if (t) seekFromEvent(t.clientX)
   }
-
   const applyId = () => {
     const id = idInput.trim()
     if (id) void audio.setSource('music', id)
   }
 
-  const togglePin = () => {
-    const v = !pinned
-    setPinned(v)
-    save('rain.pinned', v)
-  }
-
   const ModeIcon = audio.mode === 'shuffle' ? ShuffleIcon : audio.mode === 'one' ? RepeatOneIcon : RepeatIcon
-  const modeLabel = audio.mode === 'shuffle' ? '随机' : audio.mode === 'one' ? '单曲' : '顺序'
 
+  // 收起后：只留一个播放键；点击页面底部区域唤起
   if (hidden) {
     return (
-      <div className="mini-dock">
-        <button className="glass mini" onClick={audio.togglePlay} aria-label="播放/暂停">
-          {audio.playing ? <PauseIcon className="ico" /> : <PlayIcon className="ico" />}
-        </button>
-        <button className="glass mini mini-expand" onClick={() => setHidden(false)} aria-label="展开">
-          <ChevronUpIcon className="ico sm" />
-        </button>
-      </div>
+      <>
+        <div className="wake-zone" onClick={() => setHidden(false)} />
+        <div className="mini-dock">
+          <button className="glass mini" onClick={audio.togglePlay} aria-label="播放/暂停">
+            {audio.playing ? <PauseIcon className="ico" /> : <PlayIcon className="ico" />}
+          </button>
+        </div>
+      </>
     )
   }
 
   return (
-    <div
-      ref={dockRef}
-      className={`dock ${panel ? 'panel-open' : ''}`}
-      onPointerDown={() => setInteracted(true)}
-    >
+    <div className={`dock ${panel ? 'panel-open' : ''}`}>
       {panel && (
         <div className="glass panel">
           <div className="panel-group">
@@ -201,22 +164,42 @@ export default function PlayerBar({ audio, bgMode, onBgMode, onShuffleBg, showSe
             </button>
           </div>
 
+          {bgMode === 'anime' && (
+            <div className="panel-group viewer">
+              <div className="panel-label">阅图模式</div>
+              <Toggle label="雨滴效果" on={animeRain} onChange={setAnimeRain} />
+              <Toggle label="自动轮播 · 18 秒" on={cycle} onChange={setCycle} />
+              <div className="vol-row">
+                <span className="bright-label">亮度</span>
+                <input
+                  className="slider"
+                  type="range"
+                  min={0.35}
+                  max={1}
+                  step={0.01}
+                  style={{ ['--fill' as string]: `${(((1 - dim) - 0.35) / 0.65) * 100}%` }}
+                  value={1 - dim}
+                  onChange={(e) => setDim(1 - Number(e.target.value))}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="panel-grid">
-            <Toggle label="显示秒" on={showSeconds} onChange={onShowSeconds} />
             <button className="row-btn" onClick={toggleFullscreen}>
               {isFs ? <ExitFullscreenIcon className="ico sm" /> : <FullscreenIcon className="ico sm" />}
               {isFs ? '退出全屏' : '全屏'}
             </button>
-            <Toggle label="固定播放条" on={pinned} onChange={togglePin} />
-            {isMusic && (
-              <button className="row-btn" onClick={audio.cycleMode}>
-                <ModeIcon className="ico sm" /> 播放：{modeLabel}
-              </button>
-            )}
-            <button className="row-btn" onClick={() => setHidden(true)}>
-              <ChevronDownIcon className="ico sm" /> 收起（只留时钟）
+            <button
+              className="row-btn"
+              onClick={() => {
+                setPanel(false)
+                setHidden(true)
+              }}
+            >
+              <ChevronDownIcon className="ico sm" /> 收起
             </button>
-            <button className="row-btn" onClick={() => setPanel(false)}>
+            <button className="row-btn wide" onClick={() => setPanel(false)}>
               完成
             </button>
           </div>
@@ -235,7 +218,6 @@ export default function PlayerBar({ audio, bgMode, onBgMode, onShuffleBg, showSe
           <div className="fill" style={{ width: `${progress}%` }} />
           <div className="thumb" style={{ left: `${progress}%` }} />
         </div>
-
         <div className="bar-row">
           <div className="meta">
             {isMusic ? (
@@ -257,7 +239,6 @@ export default function PlayerBar({ audio, bgMode, onBgMode, onShuffleBg, showSe
               </>
             )}
           </div>
-
           <div className="transport">
             {isMusic && (
               <button className="icon-btn" onClick={audio.prev} aria-label="上一首">
@@ -273,7 +254,6 @@ export default function PlayerBar({ audio, bgMode, onBgMode, onShuffleBg, showSe
               </button>
             )}
           </div>
-
           <div className="actions">
             <span className="time">
               {fmt(audio.ctime)}

@@ -9,7 +9,6 @@
     "preview": "vite preview --host"
   },
   "dependencies": {
-    "liquid-glass-react": "^1.1.1",
     "raindrop-fx": "^1.0.8",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

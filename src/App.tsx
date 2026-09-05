@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import RainCanvas from './components/RainCanvas'
-import GlassClock from './components/GlassClock'
+import Clock from './components/Clock'
 import PlayerBar from './components/PlayerBar'
 import { useRainAudio } from './hooks/useRainAudio'
 import { load, save } from './lib/storage'
@@ -12,7 +12,11 @@ export default function App() {
   const audio = useRainAudio()
   const [bgMode, setBgMode] = useState<BgMode>(load('rain.bgMode', 'rain'))
   const [bgNonce, setBgNonce] = useState(0)
-  const [showSeconds, setShowSeconds] = useState<boolean>(load('rain.sec', true))
+
+  // 动漫阅图模式偏好
+  const [animeRain, setAnimeRain] = useState<boolean>(load('rain.animeRain', true))
+  const [dim, setDim] = useState<number>(load('rain.animeDim', 0))
+  const [cycle, setCycle] = useState<boolean>(load('rain.animeCycle', false))
 
   const onPalette = useCallback((p: Palette) => {
     const root = document.documentElement
@@ -22,7 +26,6 @@ export default function App() {
     root.style.setProperty('--mist', p.mist)
   }, [])
 
-  // 首次先给一个默认雨窗绿，背景解码后再被主色覆盖
   useEffect(() => {
     document.documentElement.style.setProperty('--accent', 'hsl(152 42% 64%)')
     document.documentElement.style.setProperty('--accent-rgb', '126,201,170')
@@ -35,37 +38,46 @@ export default function App() {
   }
   const shuffleBg = () => setBgNonce((n) => n + 1)
 
+  // 动漫轮播
+  useEffect(() => {
+    if (!(bgMode === 'anime' && cycle)) return
+    const id = window.setInterval(() => setBgNonce((n) => n + 1), 18000)
+    return () => window.clearInterval(id)
+  }, [bgMode, cycle])
+
+  // 雨窗模式恒有雨；动漫模式按开关
+  const rainOn = bgMode === 'rain' || animeRain
+
   return (
     <div className="app">
-      <RainCanvas mode={bgMode} nonce={bgNonce} onPalette={onPalette} />
+      <RainCanvas mode={bgMode} nonce={bgNonce} rainOn={rainOn} dim={dim} onPalette={onPalette} />
       <div className="vignette" />
 
-      {audio.entered && (
-        <div className="ui-layer">
-          <GlassClock showSeconds={showSeconds} />
-          <PlayerBar
-            audio={audio}
-            bgMode={bgMode}
-            onBgMode={changeBgMode}
-            onShuffleBg={shuffleBg}
-            showSeconds={showSeconds}
-            onShowSeconds={(b) => {
-              setShowSeconds(b)
-              save('rain.sec', b)
-            }}
-          />
-        </div>
-      )}
+      <div className="ui-top">
+        <Clock />
+      </div>
 
-      {!audio.entered && (
-        <div className="entry" onClick={() => void audio.enter()}>
-          <div className="entry-card">
-            <div className="entry-title">听雨</div>
-            <div className="entry-sub">点击进入 · 雨窗旁的宁静时刻</div>
-            <div className="entry-pulse" />
-          </div>
-        </div>
-      )}
+      <PlayerBar
+        audio={audio}
+        bgMode={bgMode}
+        onBgMode={changeBgMode}
+        onShuffleBg={shuffleBg}
+        animeRain={animeRain}
+        setAnimeRain={(v) => {
+          setAnimeRain(v)
+          save('rain.animeRain', v)
+        }}
+        dim={dim}
+        setDim={(v) => {
+          setDim(v)
+          save('rain.animeDim', v)
+        }}
+        cycle={cycle}
+        setCycle={(v) => {
+          setCycle(v)
+          save('rain.animeCycle', v)
+        }}
+      />
     </div>
   )
 }
