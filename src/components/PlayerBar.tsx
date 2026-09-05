@@ -19,6 +19,7 @@ import {
   SlidersIcon,
   VolumeIcon,
 } from '../lib/icons'
+import { QUALITY_OPTIONS } from '../lib/meting'
 
 type Audio = ReturnType<typeof useRainAudio>
 type BgMode = 'rain' | 'anime'
@@ -130,6 +131,24 @@ export default function PlayerBar(props: Props) {
             </div>
           )}
 
+          {isMusic && (
+            <div className="panel-group">
+              <div className="panel-label">音质（切换后自动续播）</div>
+              <div className="seg seg-quality">
+                {QUALITY_OPTIONS.map((q) => (
+                  <button
+                    key={q.value}
+                    className={audio.quality === q.value ? 'on' : ''}
+                    title={q.hint}
+                    onClick={() => audio.setQuality(q.value)}
+                  >
+                    {q.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="panel-group">
             <div className="panel-label">音量</div>
             <div className="vol-row">
@@ -202,6 +221,16 @@ export default function PlayerBar(props: Props) {
             <button className="row-btn wide" onClick={() => setPanel(false)}>
               完成
             </button>
+          </div>
+
+          <div className="panel-links">
+            <a href="https://hiweny.github.io/Hiweny-s-web/" target="_blank" rel="noreferrer">
+              个人主页
+            </a>
+            <span className="dot">·</span>
+            <a href="https://github.com/Hiweny/rain" target="_blank" rel="noreferrer">
+              GitHub 项目
+            </a>
           </div>
         </div>
       )}

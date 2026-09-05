@@ -75,10 +75,24 @@ button {
   z-index: 1;
   display: block;
 }
-.dim-overlay {
+/* 轮播交叉过渡层：定格旧画面并淡出，遮住 WebGL 重建闪烁 */
+.bg-crossfade {
   position: fixed;
   inset: 0;
   z-index: 2;
+  background-size: cover;
+  background-position: center;
+  background-color: #0a1310;
+  opacity: 0;
+  pointer-events: none;
+}
+.bg-crossfade.fading {
+  transition: opacity 0.95s ease-in-out;
+}
+.dim-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
   background: #000;
   opacity: 0;
   pointer-events: none;
@@ -87,7 +101,7 @@ button {
 .vignette {
   position: fixed;
   inset: 0;
-  z-index: 3;
+  z-index: 4;
   pointer-events: none;
   background:
     linear-gradient(to bottom, rgba(4, 10, 7, 0.34) 0%, rgba(4, 10, 7, 0) 22%, rgba(4, 10, 7, 0) 62%, rgba(4, 10, 7, 0.4) 100%),
@@ -100,7 +114,7 @@ button {
   top: 0;
   left: 0;
   right: 0;
-  z-index: 4;
+  z-index: 5;
   display: flex;
   justify-content: center;
   padding: calc(var(--safe-t) + clamp(46px, 10.5vh, 118px)) 20px 0;
@@ -190,7 +204,7 @@ button {
   left: 50%;
   transform: translateX(-50%);
   bottom: calc(var(--safe-b) + clamp(18px, 4vh, 38px));
-  z-index: 5;
+  z-index: 6;
   width: min(680px, 92vw);
   display: flex;
   flex-direction: column;
@@ -570,6 +584,26 @@ button {
 .toggle.on .knob {
   transform: translateX(14px);
 }
+.panel-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 2px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+.panel-links a {
+  color: rgba(255, 255, 255, 0.62);
+  text-decoration: none;
+  transition: color 0.18s;
+}
+.panel-links a:hover {
+  color: #fff;
+}
+.panel-links .dot {
+  color: rgba(255, 255, 255, 0.3);
+}
 
 /* ---------- 收起态 ---------- */
 .wake-zone {
@@ -578,7 +612,7 @@ button {
   right: 0;
   bottom: 0;
   height: calc(var(--safe-b) + 34px);
-  z-index: 6;
+  z-index: 7;
   cursor: pointer;
 }
 .mini-dock {
@@ -586,7 +620,7 @@ button {
   left: 50%;
   bottom: calc(var(--safe-b) + 26px);
   transform: translateX(-50%);
-  z-index: 7;
+  z-index: 8;
 }
 button.mini {
   width: 58px;

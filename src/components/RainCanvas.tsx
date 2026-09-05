@@ -18,11 +18,13 @@ interface Props {
 export default function RainCanvas({ mode, nonce, rainOn, dim, onPalette }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const photoRef = useRef<HTMLDivElement>(null)
+  const crossRef = useRef<HTMLDivElement>(null)
   const dimRef = useRef<HTMLDivElement>(null)
   const fxRef = useRef<RaindropFX | null>(null)
   const modeRef = useRef(mode)
   const rainOnRef = useRef(rainOn)
   const objUrlRef = useRef<string>('')
+  const shownRef = useRef<string>('')
   const onPaletteRef = useRef(onPalette)
   const firstRun = useRef(true)
   modeRef.current = mode
@@ -49,6 +51,34 @@ export default function RainCanvas({ mode, nonce, rainOn, dim, onPalette }: Prop
 
   function setPhoto(url: string) {
     if (photoRef.current && url) photoRef.current.style.backgroundImage = `url("${url}")`
+  }
+
+  /**
+   * 优雅地呈现新背景：把“当前旧画面”铺在交叉过渡层上，
+   * 底层换成新图（同时重建 WebGL 背景），再让旧画面缓慢淡出，
+   * 从而遮住 setBackground 重建模糊金字塔时的闪烁/突变。
+   */
+  function crossfadeTo(photoUrl: string) {
+    const layer = crossRef.current
+    const prev = shownRef.current
+    if (layer && prev && prev !== photoUrl) {
+      const wet = rainOnRef.current
+      layer.style.backgroundImage = `url("${prev}")`
+      layer.style.filter = wet ? 'blur(6px) saturate(1.06) brightness(0.92)' : 'saturate(1.04)'
+      layer.style.transform = wet ? 'scale(1.08)' : 'scale(1.02)'
+      layer.classList.remove('fading')
+      // 强制重排以重启动画
+      void layer.offsetWidth
+      layer.style.opacity = '1'
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          layer.classList.add('fading')
+          layer.style.opacity = '0'
+        }),
+      )
+    }
+    setPhoto(photoUrl)
+    shownRef.current = photoUrl
   }
 
   // 初始化（只跑一次）
@@ -79,7 +109,10 @@ export default function RainCanvas({ mode, nonce, rainOn, dim, onPalette }: Prop
     async function boot() {
       // 1) 先用本地雨窗图把静态图层铺满，杜绝黑屏
       const firstUrl = modeRef.current === 'rain' ? nextRainImage() : ''
-      if (firstUrl) setPhoto(firstUrl)
+      if (firstUrl) {
+        setPhoto(firstUrl)
+        shownRef.current = firstUrl
+      }
 
       // 2) 解码首图
       let first: { photoUrl: string; bitmap: ImageBitmap }
@@ -87,11 +120,11 @@ export default function RainCanvas({ mode, nonce, rainOn, dim, onPalette }: Prop
         first = await acquire(modeRef.current, firstUrl || undefined)
       } catch {
         const u = nextRainImage()
-        setPhoto(u)
         first = await acquire('rain', u)
       }
       if (cancelled) return
       setPhoto(first.photoUrl)
+      shownRef.current = first.photoUrl
       const palette = await extractPalette(first.bitmap)
       if (cancelled) return
       onPaletteRef.current(palette)
@@ -148,7 +181,7 @@ export default function RainCanvas({ mode, nonce, rainOn, dim, onPalette }: Prop
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 切换模式 / 换一张
+  // 切换模式 / 换一张（带交叉淡入）
   useEffect(() => {
     if (firstRun.current) {
       firstRun.current = false
@@ -159,7 +192,8 @@ export default function RainCanvas({ mode, nonce, rainOn, dim, onPalette }: Prop
       try {
         const got = await acquire(mode)
         if (!alive) return
-        setPhoto(got.photoUrl)
+        // 旧画面定格在上层并淡出，底层换新
+        crossfadeTo(got.photoUrl)
         const palette = await extractPalette(got.bitmap)
         if (!alive) return
         onPaletteRef.current(palette)
@@ -199,6 +233,7 @@ export default function RainCanvas({ mode, nonce, rainOn, dim, onPalette }: Prop
     <>
       <div ref={photoRef} className="bg-photo" />
       <canvas ref={canvasRef} className="rain-canvas" />
+      <div ref={crossRef} className="bg-crossfade" />
       <div ref={dimRef} className="dim-overlay" style={{ opacity: dim }} />
     </>
   )

@@ -27,6 +27,14 @@ interface Provider {
 
 const PROVIDERS: Provider[] = [
   {
+    // 首选：StudyWithMiku 同款后端。歌单里的 url 是经其服务器代理的 type=url 流式地址，
+    // 对会员歌曲也能取到【完整】音频（直连网易 CDN 的源通常只给约 30~60s 的试听片段）。
+    // br=320 即完整 320k mp3；改成 2000 可拿无损 flac，但体积大很多。
+    name: 'qijie',
+    base: 'https://api.qijieya.cn/meting/',
+    fields: { name: ['title', 'name'], artist: ['author', 'artist'], url: ['url'], pic: ['pic', 'cover'], lrc: ['lrc'] },
+  },
+  {
     name: 'injahow',
     base: 'https://api.injahow.cn/meting/',
     fields: { name: ['name', 'title'], artist: ['artist', 'author'], url: ['url'], pic: ['pic', 'cover'], lrc: ['lrc'] },
@@ -74,7 +82,7 @@ function normalize(raw: unknown, provider: Provider): Track[] {
 export async function fetchPlaylist(
   platform: Platform,
   id: string,
-  bitrate = 320,
+  bitrate: number | string = DEFAULT_BITRATE,
   onProvider?: (name: string) => void,
 ): Promise<Track[]> {
   let lastErr: unknown = null
@@ -99,3 +107,38 @@ export async function fetchPlaylist(
 
 export const DEFAULT_PLAYLIST_ID = '18284047077'
 export const RAIN_AUDIO_URL = 'https://media.rainymood.com/0.mp3'
+
+/**
+ * 音质档位（网易云 br 参数，即码率上限 kbps；2000 会返回无损 flac）。
+ * 注意：码率越高单首体积越大——无损常在 20~60MB，移动端流量/弱网需谨慎。
+ */
+export interface QualityOption {
+  value: string
+  label: string
+  hint: string
+}
+export const QUALITY_OPTIONS: QualityOption[] = [
+  { value: '320', label: '标准', hint: '320k · 省流' },
+  { value: '740', label: '高音质', hint: '较高码率' },
+  { value: '2000', label: '无损', hint: 'FLAC · 体积大' },
+]
+export const DEFAULT_BITRATE = '740'
+
+/**
+ * 按设备与网络自适应挑选初始音质（用户手动选择后会被持久化、不再自动改）：
+ * 省流/弱网 → 标准；手机蜂窝 → 高音质；桌面或 Wi‑Fi → 无损。
+ */
+export function autoQuality(): string {
+  if (typeof navigator === 'undefined') return DEFAULT_BITRATE
+  const conn = (
+    navigator as Navigator & {
+      connection?: { saveData?: boolean; effectiveType?: string; type?: string }
+    }
+  ).connection
+  if (conn?.saveData) return '320'
+  const eff = conn?.effectiveType
+  if (eff === 'slow-2g' || eff === '2g' || eff === '3g') return '320'
+  const coarse = window.matchMedia?.('(pointer: coarse)').matches
+  if (conn?.type === 'cellular' || (coarse && conn?.type !== 'wifi')) return '740'
+  return coarse ? '740' : '2000'
+}

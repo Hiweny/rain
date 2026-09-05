@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { DEFAULT_PLAYLIST_ID, RAIN_AUDIO_URL, fetchPlaylist, type Platform, type Track } from '../lib/meting'
+import {
+  DEFAULT_PLAYLIST_ID,
+  RAIN_AUDIO_URL,
+  autoQuality,
+  fetchPlaylist,
+  type Platform,
+  type Track,
+} from '../lib/meting'
 import { load, save } from '../lib/storage'
 
 export type Source = 'rain' | 'music'
@@ -30,6 +37,9 @@ export function useRainAudio() {
   const [mode, setModeState] = useState<PlayMode>(load('rain.mode', 'list'))
   const [platform] = useState<Platform>('netease')
   const [playlistId, setPlaylistIdState] = useState<string>(load('rain.playlistId', DEFAULT_PLAYLIST_ID))
+  const [quality, setQualityState] = useState<string>(load('rain.quality', autoQuality()))
+  const qualityRef = useRef(quality)
+  qualityRef.current = quality
   const [loadingList, setLoadingList] = useState(false)
   const [listError, setListError] = useState('')
 
@@ -39,6 +49,12 @@ export function useRainAudio() {
   const idxRef = useRef(idx)
   const tracksRef = useRef(tracks)
   const failedRef = useRef<Set<number>>(new Set())
+  // 进度记忆：刷新/重进后恢复到上次位置
+  const playlistIdRef = useRef(playlistId)
+  const rainSeekRef = useRef<number | null>(load<number>('rain.posRain', 0) || null)
+  const musicSeekRef = useRef<number | null>(null)
+  const lastPersistRef = useRef(0)
+  playlistIdRef.current = playlistId
   sourceRef.current = source
   modeRef.current = mode
   idxRef.current = idx
@@ -67,9 +83,26 @@ export function useRainAudio() {
       const a = activeAudio()
       if (a) setCtime(a.currentTime)
     }
+
+    // 把待恢复的进度在元数据就绪后跳转一次
+    const applyPendingSeek = (a: HTMLAudioElement, pending: { current: number | null }) => {
+      if (pending.current == null) return
+      const t = pending.current
+      pending.current = null
+      if (isFinite(a.duration) && a.duration > 1 && t > 1 && t < a.duration - 1) {
+        try {
+          a.currentTime = t
+        } catch {
+          /* ignore */
+        }
+      }
+    }
     const onMeta = () => {
       const a = activeAudio()
-      if (a) setDur(a.duration || 0)
+      if (!a) return
+      setDur(a.duration || 0)
+      if (a === rain) applyPendingSeek(a, rainSeekRef)
+      if (a === music) applyPendingSeek(a, musicSeekRef)
     }
     const goNext = () => advance(true)
     const onErr = () => {
@@ -79,6 +112,21 @@ export function useRainAudio() {
         advance(true)
       }
     }
+    // 持久化播放进度（节流，页面隐藏/暂停时强制写一次）
+    const persist = (force = false) => {
+      const now = Date.now()
+      if (!force && now - lastPersistRef.current < 2500) return
+      lastPersistRef.current = now
+      if (rainRef.current && isFinite(rainRef.current.currentTime) && rainRef.current.duration) {
+        save('rain.posRain', rainRef.current.currentTime)
+      }
+      const m = musicRef.current
+      if (m && isFinite(m.currentTime) && tracksRef.current.length) {
+        save('rain.posMusic', { id: playlistIdRef.current, idx: idxRef.current, t: m.currentTime })
+      }
+    }
+    const onPageHide = () => persist(true)
+    const onPersistPause = () => persist(true)
     rain.addEventListener('play', onPlay)
     rain.addEventListener('pause', onPause)
     music.addEventListener('play', onPlay)
@@ -89,16 +137,22 @@ export function useRainAudio() {
     rain.addEventListener('loadedmetadata', onMeta)
     music.addEventListener('ended', goNext)
     music.addEventListener('error', onErr)
+    rain.addEventListener('pause', onPersistPause)
+    music.addEventListener('pause', onPersistPause)
+    window.addEventListener('pagehide', onPageHide)
+    document.addEventListener('visibilitychange', onPageHide)
 
     const timer = window.setInterval(() => {
       const a = activeAudio()
       if (a) {
         setCtime(a.currentTime)
         setDur(Number.isFinite(a.duration) ? a.duration : 0)
+        persist()
       }
     }, 500)
 
     return () => {
+      persist(true)
       window.clearInterval(timer)
       rain.pause()
       music.pause()
@@ -106,12 +160,16 @@ export function useRainAudio() {
       rain.removeEventListener('pause', onPause)
       rain.removeEventListener('timeupdate', onTime)
       rain.removeEventListener('loadedmetadata', onMeta)
+      rain.removeEventListener('pause', onPersistPause)
       music.removeEventListener('play', onPlay)
       music.removeEventListener('pause', onPause)
       music.removeEventListener('timeupdate', onTime)
       music.removeEventListener('loadedmetadata', onMeta)
       music.removeEventListener('ended', goNext)
       music.removeEventListener('error', onErr)
+      music.removeEventListener('pause', onPersistPause)
+      window.removeEventListener('pagehide', onPageHide)
+      document.removeEventListener('visibilitychange', onPageHide)
       rainRef.current = null
       musicRef.current = null
     }
@@ -133,17 +191,26 @@ export function useRainAudio() {
       setLoadingList(true)
       setListError('')
       try {
-        const list = await fetchPlaylist(platform, id || DEFAULT_PLAYLIST_ID)
+        const list = await fetchPlaylist(platform, id || DEFAULT_PLAYLIST_ID, qualityRef.current)
         if (!list.length) throw new Error('歌单为空或不可访问')
         failedRef.current = new Set()
         tracksRef.current = list
-        idxRef.current = 0
+        // 同一歌单则恢复到上次的曲目与进度；新歌单从头开始
+        const saved = load<{ id: string; idx: number; t: number } | null>('rain.posMusic', null)
+        let startIdx = 0
+        let startT: number | null = null
+        if (saved && saved.id === id && Number.isInteger(saved.idx) && saved.idx >= 0 && saved.idx < list.length) {
+          startIdx = saved.idx
+          startT = saved.t && saved.t > 2 ? saved.t : null
+        }
+        idxRef.current = startIdx
         setTracks(list)
-        setIdx(0)
+        setIdx(startIdx)
         setPlaylistIdState(id)
         save('rain.playlistId', id)
+        musicSeekRef.current = startT
         if (musicRef.current) {
-          musicRef.current.src = list[0].url
+          musicRef.current.src = list[startIdx].url
         }
         return list
       } catch (e) {
@@ -244,6 +311,7 @@ export function useRainAudio() {
         failedRef.current.clear()
       }
       setIdx(nextIdx)
+      musicSeekRef.current = null
       if (musicRef.current) {
         musicRef.current.src = list[nextIdx].url
         musicRef.current.play().catch(() => {})
@@ -264,6 +332,7 @@ export function useRainAudio() {
     }
     const p = (idxRef.current - 1 + list.length) % list.length
     setIdx(p)
+    musicSeekRef.current = null
     if (musicRef.current) {
       musicRef.current.src = list[p].url
       musicRef.current.play().catch(() => {})
@@ -277,6 +346,18 @@ export function useRainAudio() {
     setModeState(m)
     save('rain.mode', m)
   }, [])
+
+  // 切换音质：持久化并用新码率重新拉取歌单（会尽量续播当前曲目与进度）
+  const setQuality = useCallback(
+    async (q: string) => {
+      qualityRef.current = q
+      setQualityState(q)
+      save('rain.quality', q)
+      await loadPlaylist(playlistIdRef.current)
+      await playActive()
+    },
+    [loadPlaylist, playActive],
+  )
 
   const seek = useCallback(
     (t: number) => {
@@ -326,6 +407,8 @@ export function useRainAudio() {
     prev,
     mode,
     cycleMode,
+    quality,
+    setQuality,
     loadingList,
     listError,
     playlistId,
